@@ -1,0 +1,8 @@
+<?xml version="1.0" ?>
+<!-- 텍스처만 담는 자리표시자. 포드 본체는 월드에 인라인으로 들어간다. -->
+<sdf version="1.10">
+  <model name="pod_markers">
+    <static>true</static>
+    <link name="l"/>
+  </model>
+</sdf>

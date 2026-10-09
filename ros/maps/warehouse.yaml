@@ -1,0 +1,13 @@
+# PROJECT_2 노드형 관제 시스템 - 점유 격자
+# gen_gridmap.py 생성물. warehouse.sdf 의 고정 구조물에서 뽑았다.
+# resolution 과 origin 은 config 테이블의 map_resolution / map_origin_x,y 와 맞춰라.
+#
+# free_thresh 를 0.25 로 올리지 마라. 미지값 205 가 (255-205)/255 = 0.19608 이라
+# 0.25 보다 작아져서 창고 바깥까지 전부 자유 공간이 된다.
+image: warehouse.pgm
+mode: trinary
+resolution: 0.05
+origin: [-15.55, -10.55, 0.0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.196
