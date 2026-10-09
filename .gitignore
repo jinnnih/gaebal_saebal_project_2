@@ -31,3 +31,19 @@ Thumbs.db
 plan/
 .claude/
 .DS_Store
+
+# 접속 정보 변형은 전부 제외, 견본만 허용
+.env.*
+!.env.example
+
+# 인증서·키
+*.pem
+*.key
+*.p12
+
+# DB 덤프·로컬 DB 파일 (schema.sql 은 해당 없음)
+*.dump
+dump*.sql
+backup*.sql
+*.sqlite
+*.db
