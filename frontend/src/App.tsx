@@ -70,6 +70,9 @@ export default function App() {
   const [dragFrom, setDragFrom] = useState<number | null>(null) // 끌기를 시작한 노드 id
   const [cursor, setCursor] = useState<Pt | null>(null)         // 끄는 중인 마우스 위치
   const pressedAt = useRef<Pt | null>(null)                     // 마우스를 누른 자리 (클릭인지 끌기인지 가르려고)
+  const [moving, setMoving] = useState<{ id: number; pos: Pt } | null>(null)  // 노드 모드: 옮기는 중인 노드와 그 임시 위치(미터)
+  const movedRef = useRef(false)          // 이번 누름에서 노드가 실제로 움직였는지
+  const suppressClick = useRef(false)     // 끌기 끝에 따라오는 click 으로 노드가 선택되는 것 방지
 
   const load = () =>
     fetch(`${API}/map`)
@@ -78,7 +81,11 @@ export default function App() {
 
   useEffect(() => { load() }, [])
 
-  const byId = new Map(nodes.map(n => [n.id, n]))
+  // 옮기는 중인 노드는 임시 위치로 그림 (놓기 전에도 화살표가 같이 따라옴)
+  const shownNodes = moving
+    ? nodes.map(n => n.id === moving.id ? { ...n, x: moving.pos.x, y: moving.pos.y } : n)
+    : nodes
+  const byId = new Map(shownNodes.map(n => [n.id, n]))
 
   // 마우스 위치를 SVG 기준 픽셀로
   const pointerPx = (e: React.MouseEvent<SVGSVGElement>): Pt => {
@@ -104,12 +111,16 @@ export default function App() {
     setSelected(null)
     setDragFrom(null)
     setCursor(null)
+    setMoving(null)
     setError('')
   }
 
   // ---------- 노드 모드: 빈 곳 클릭 = 노드 추가 ----------
   const onMapClick = async (e: React.MouseEvent<SVGSVGElement>) => {
     if (mode !== 'node') return   // 길 모드에서는 끌기 끝에 click 이 따라오니 무시
+    // 노드를 끌다 노드 밖에서 놓으면 click 이 지도로 오는데, 그건 새 노드를 찍으려는 게 아님
+    if (suppressClick.current) { suppressClick.current = false; return }
+
     const box = e.currentTarget.getBoundingClientRect()
     const x = snap(toM(e.clientX - box.left))
     const y = snap(toM(e.clientY - box.top))
@@ -151,6 +162,18 @@ export default function App() {
   const onMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
     const p = pointerPx(e)
 
+    // 노드 모드: 노드 위에서 누르면 이동 준비 (실제로 움직여야 이동, 안 움직이면 클릭=선택)
+    if (mode === 'node') {
+      const hit = nearestNode(p)
+      if (!hit || Math.hypot(toPx(hit.x) - p.x, toPx(hit.y) - p.y) > NODE_R) return
+      e.preventDefault()
+      pressedAt.current = p
+      movedRef.current = false
+      suppressClick.current = false
+      setMoving({ id: hit.id, pos: { x: hit.x, y: hit.y } })
+      return
+    }
+
     if (mode !== 'edge') return
     const start = nearestNode(p)     // 정확히 노드를 안 눌러도 가장 가까운 노드에서 시작
     if (!start) return
@@ -161,6 +184,18 @@ export default function App() {
   }
 
   const onMouseMove = (e: React.MouseEvent<SVGSVGElement>) => {
+    if (moving) {
+      const p = pointerPx(e)
+      const down = pressedAt.current
+      // 처음 누른 자리에서 조금 움직여야 이동 시작 (클릭 손떨림 무시)
+      if (!movedRef.current && (!down || Math.hypot(p.x - down.x, p.y - down.y) < DRAG_MIN_PX)) return
+      movedRef.current = true
+      // 격자에 맞추고 지도 밖으로는 못 나가게
+      const x = Math.min(VIEW_W, Math.max(0, snap(toM(p.x))))
+      const y = Math.min(VIEW_H, Math.max(0, snap(toM(p.y))))
+      if (x !== moving.pos.x || y !== moving.pos.y) setMoving({ id: moving.id, pos: { x, y } })
+      return
+    }
     if (dragFrom === null) return
     setCursor(pointerPx(e))
   }
@@ -168,9 +203,30 @@ export default function App() {
   const cancelDrag = () => {
     setDragFrom(null)
     setCursor(null)
+    setMoving(null)   // 노드 이동 중에 지도 밖으로 나가면 취소 (저장 안 됨)
+  }
+
+  // 노드 이동 끝: 놓은 자리를 저장
+  const finishMove = async () => {
+    if (!moving) return
+    const { id, pos } = moving
+    setMoving(null)
+    if (!movedRef.current) return   // 안 움직였으면 그냥 클릭 → 선택은 노드의 onClick 이 처리
+    suppressClick.current = true
+
+    setNodes(ns => ns.map(n => n.id === id ? { ...n, x: pos.x, y: pos.y } : n))   // 서버 응답 전에도 제자리에 머물게
+    const res = await fetch(`${API}/nodes/${id}`, {
+      method: 'PATCH',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ x: pos.x, y: pos.y }),
+    })
+    if (!res.ok) setError((await res.json().catch(() => null))?.error ?? '노드를 옮기지 못함')
+    else setError('')
+    await load()   // 실패하면 원래 자리로, 성공하면 서버가 다시 계산한 길 거리까지 반영
   }
 
   const onMouseUp = async (e: React.MouseEvent<SVGSVGElement>) => {
+    if (moving) return finishMove()
     if (dragFrom === null) return
     const from = dragFrom
     const start = byId.get(from)
@@ -259,7 +315,7 @@ export default function App() {
 
       {mode === 'node' ? (
         <p>
-          빈 곳 클릭 = 노드 추가 · 노드 클릭 = 선택 (격자 {GRID}m)
+          빈 곳 클릭 = 노드 추가 · 노드 클릭 = 선택 · 노드 끌기 = 이동 (격자 {GRID}m)
           {' '}
           <button onClick={onDelete} disabled={selected === null}>
             선택한 노드 삭제
@@ -339,14 +395,15 @@ export default function App() {
             style={{ pointerEvents: 'none' }} />
         )}
 
-        {nodes.map(n => (
+        {shownNodes.map(n => (
           <g key={n.id}
             onClick={e => {
               e.stopPropagation()                        // 지도 클릭으로 안 넘김
               if (mode !== 'node') return
+              if (suppressClick.current) { suppressClick.current = false; return }   // 끌기 끝의 click 은 선택 아님
               setSelected(selected === n.id ? null : n.id) // 다시 누르면 선택 해제
             }}
-            style={{ cursor: mode === 'node' ? 'pointer' : 'inherit' }}>
+            style={{ cursor: mode === 'node' ? 'grab' : 'inherit' }}>
             <circle cx={toPx(n.x)} cy={toPx(n.y)} r={NODE_R}
                     fill={COLOR[n.type]}
                     stroke={ringColor(n.id)}
