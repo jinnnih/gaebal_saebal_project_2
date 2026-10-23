@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 import type { MapNode, MapEdge } from './types'
+import { findRoute } from './route'
+import { isActive, planPath, step } from './tasks'
+import type { Task } from './tasks'
 import { SEED_LINES, buildLine, cleanUp, distToSegment, gridSnap } from './mapEdit'
 import type { Line } from './mapEdit'
 import './App.css'
@@ -30,6 +33,13 @@ const C_EDGE_MODE = '#805ad5'   // 길 모드 색 (보라) — 일방통행 보�
 const C_DEL_MODE  = '#e53e3e'   // 삭제 모드 색 (빨강). 지워질 대상도 이 색으로 미리 보여줌
 const C_MAP_EDIT  = '#dd6b20'   // 맵 수정 색 (주황)
 
+const AMR_PALETTE = ['#ed8936', '#319795', '#d53f8c', '#718096']   // 로봇 색 (이름표·경로). 로봇 수 상한도 이 개수
+const C_OCCUPIED = '#e53e3e'   // 점유된 노드 (빨강). 비어 있으면 하얀 바탕 + 검은 테두리
+const C_NODE_LINE = '#1a202c'  // 노드 테두리·글자
+const C_FROM = '#38a169'   // 출발 노드 (초록)
+const C_TO   = '#e53e3e'   // 도착 노드 (빨강)
+const STEP_MS = 700        // 더미 이동: 노드 하나를 지나는 데 걸리는 시간
+
 // 모드 전환 버튼. 현재 모드는 색이 꽉 차고, 아닌 쪽은 테두리만 있음
 const modeBtn = (active: boolean, side: 'left' | 'mid' | 'right', color: string): React.CSSProperties => ({
   padding: '7px 18px',
@@ -53,12 +63,15 @@ type Pt = { x: number; y: number }   // 화면(SVG) 픽셀 좌표
 type Mode = 'node' | 'edge' | 'delete'   // 노드 모드 / 길 모드 / 삭제 모드
 type Target = { kind: 'node' | 'edge'; id: number }   // 삭제 모드에서 마우스가 올라간 대상
 
-type Tab = 'node' | 'manual' | 'mapping'   // 오른쪽 패널 탭: 노드 / 수동 조작 / 매핑
+type Tab = 'node' | 'manual' | 'tasks' | 'mapping'   // 오른쪽 패널 탭: 노드 / 수동 조작 / 작업목록 / 매핑
 const TABS: { id: Tab; label: string }[] = [
   { id: 'node', label: '노드' },
   { id: 'manual', label: '수동 조작' },
+  { id: 'tasks', label: '작업목록' },
   { id: 'mapping', label: '매핑' },
 ]
+
+const STATUS_LABEL = { running: '이동 중', waiting: '대기 중', done: '완료', cancelled: '취소됨' } as const
 
 type MapTab = 'create' | 'edit'            // 매핑 탭 안의 두 갈래: 맵 생성 / 맵 수정
 type Tool = 'line' | 'erase' | 'region'    // 맵 수정 도구: 선 그리기 / 지우개 / 영역 선택(부분 매핑)
@@ -123,6 +136,27 @@ export default function App() {
 
   const [lastCmd, setLastCmd] = useState('없음')         // 수동 조작 마지막으로 누른 버튼
 
+  // ---- 수동 조작 탭: AMR 이동 명령 (더미. 실제로는 서버가 로봇에 목표 노드를 보냄) ----
+  const [amr, setAmr] = useState('R1')                                // 선택한 AMR
+  const [robotNode, setRobotNode] = useState<Record<string, number>>({})   // AMR 별로 지금 서 있는 노드 id
+  const [fromId, setFromId] = useState<number | null>(null)           // 출발 노드
+  const [toId, setToId] = useState<number | null>(null)               // 도착 노드
+  const [pick, setPick] = useState<'from' | 'to' | null>(null)        // 지도에서 노드를 눌러 고르는 중인지
+  const [moveMsg, setMoveMsg] = useState('')
+
+  // ---- 작업목록 탭 (더미) ----
+  const [amrs, setAmrs] = useState(['R1', 'R2'])          // 더미 로봇 목록 (나중에 DB 의 robot 표로)
+  const [tasks, setTasks] = useState<Task[]>([])           // 이동 작업들 (최신이 위)
+  const nextTaskId = useRef(1)
+  const [editId, setEditId] = useState<number | null>(null)   // 경로를 수정 중인 작업
+  const [editFrom, setEditFrom] = useState<number | null>(null)
+  const [editTo, setEditTo] = useState<number | null>(null)
+  const [taskMsg, setTaskMsg] = useState('')
+  const tasksRef = useRef<Task[]>([])                      // 타이머 안에서 최신 값을 읽으려고 복사해 둠
+  const posRef = useRef<Record<string, number>>({})
+  tasksRef.current = tasks
+  posRef.current = robotNode
+
   const [mode, setMode] = useState<Mode>('node')
   const [dragFrom, setDragFrom] = useState<number | null>(null) // 끌기를 시작한 노드 id
   const [cursor, setCursor] = useState<Pt | null>(null)         // 끄는 중인 마우스 위치
@@ -139,6 +173,35 @@ export default function App() {
       .then(data => { setNodes(data.nodes); setEdges(data.edges) })
 
   useEffect(() => { load() }, [])
+
+  // 로봇 시작 위치를 정함. 처음 두 대는 W, A 노드(있으면), 나머지는 비어 있는 첫 노드.
+  // 노드가 지워져서 서 있을 곳이 없어졌으면 다시 정함
+  useEffect(() => {
+    if (nodes.length === 0) return
+    setRobotNode(cur => {
+      const next = { ...cur }
+      const taken = new Set(Object.values(next))
+      const home = ['W', 'A']
+      amrs.forEach((a, i) => {
+        if (next[a] !== undefined && nodes.some(n => n.id === next[a])) return
+        const spot = nodes.find(n => n.name === home[i] && !taken.has(n.id)) ?? nodes.find(n => !taken.has(n.id))
+        if (spot) { next[a] = spot.id; taken.add(spot.id) }
+      })
+      return next
+    })
+  }, [nodes, amrs])
+
+  // 더미 이동: STEP_MS 마다 진행 중인 작업을 한 칸씩 (다음 노드를 다른 로봇이 점유 중이면 기다림)
+  const hasActiveTask = tasks.some(isActive)
+  useEffect(() => {
+    if (!hasActiveTask) return
+    const t = setInterval(() => {
+      const r = step(tasksRef.current, posRef.current)
+      setTasks(r.tasks)
+      setRobotNode(r.pos)
+    }, STEP_MS)
+    return () => clearInterval(t)
+  }, [hasActiveTask])
 
   // 더미 맵 생성: 150ms 마다 2% 씩 지도가 그려지고, 100% 가 되면 끝
   useEffect(() => {
@@ -193,6 +256,7 @@ export default function App() {
 
   const goTab = (t: Tab) => {
     setTab(t)
+    setPick(null)
     setDraft(null)
     setDragFrom(null)
     setCursor(null)
@@ -499,15 +563,99 @@ export default function App() {
     }
   }
 
+  // 삭제 모드는 노드 탭에서만 유효. 다른 탭에서 노드를 눌러 고를 때 실수로 지워지면 안 되니까
+  const delMode = tab === 'node' && mode === 'delete'
+
+  // 수동 조작 탭: 선택한 AMR 이 "현재 위치 → 출발 → 도착" 으로 가는 경로
+  const nodeName = (id: number) => byId.get(id)?.name ?? '?'
+  const curNode = robotNode[amr]
+  const planReady = fromId !== null && toId !== null && fromId !== toId
+  const toStart = curNode !== undefined && fromId !== null ? findRoute(edges, curNode, fromId) : null
+  const toDest = planReady ? findRoute(edges, fromId, toId) : null
+  const planOk = planReady && toStart !== null && toDest !== null
+
+  const amrColor = (a: string) => AMR_PALETTE[Math.max(0, amrs.indexOf(a)) % AMR_PALETTE.length]
+  const activeTaskOf = (a: string) => tasks.find(t => t.amr === a && isActive(t))
+  const occupied = new Set(Object.values(robotNode))   // 로봇이 서 있는 노드 = 점유 중
+
+  // 이동 시작 = 작업목록에 작업 하나를 추가. 한 로봇은 동시에 작업 하나만
+  const onGo = () => {
+    if (!planOk || activeTaskOf(amr)) return
+    const id = nextTaskId.current++
+    setTasks(ts => [{
+      id, amr, from: fromId, to: toId,
+      path: [...toStart.nodes, ...toDest.nodes.slice(1)], idx: 0, status: 'running',
+    }, ...ts])
+    setMoveMsg(`${amr} 작업 #${id} 시작 — 작업목록에서 취소·수정할 수 있음`)
+  }
+
+  // 작업 취소: 로봇은 지금 서 있는 노드에서 멈춤
+  const cancelTask = (id: number) => {
+    setTasks(ts => ts.map(t => t.id === id && isActive(t) ? { ...t, status: 'cancelled', blockedBy: undefined } : t))
+    if (editId === id) setEditId(null)
+    setTaskMsg(`작업 #${id} 취소 — 로봇은 지금 위치에서 멈춤`)
+  }
+
+  const startEdit = (t: Task) => {
+    setEditId(t.id)
+    setEditFrom(t.from)
+    setEditTo(t.to)
+    setTaskMsg('')
+  }
+
+  // 작업 수정: 로봇이 지금 서 있는 노드에서부터 새 경로(현재 → 출발 → 도착)로 다시 계획
+  const applyEdit = (t: Task) => {
+    if (editFrom === null || editTo === null) { setTaskMsg('출발과 도착 노드를 고르세요'); return }
+    const cur = robotNode[t.amr]
+    const r = planPath(edges, cur, editFrom, editTo)
+    if (!r.ok) { setTaskMsg(r.reason); return }
+    setTasks(ts => ts.map(x => x.id === t.id
+      ? { ...x, from: editFrom, to: editTo, path: r.path, idx: 0, status: 'running', blockedBy: undefined }
+      : x))
+    setEditId(null)
+    setTaskMsg(`작업 #${t.id} 경로 수정: ${r.path.map(nodeName).join(' → ')}`)
+  }
+
+  const clearFinished = () => setTasks(ts => ts.filter(isActive))
+
+  // 더미 로봇 추가: 비어 있는 첫 노드에 놓음
+  const addRobot = () => {
+    if (amrs.length >= AMR_PALETTE.length) return
+    const spot = nodes.find(n => !occupied.has(n.id))
+    if (!spot) { setTaskMsg('빈 노드가 없어 로봇을 놓을 수 없음'); return }
+    let i = amrs.length + 1
+    while (amrs.includes(`R${i}`)) i++
+    const name = `R${i}`
+    setAmrs(a => [...a, name])
+    setRobotNode(r => ({ ...r, [name]: spot.id }))
+    setTaskMsg(`${name} 을(를) ${spot.name} 노드에 추가 (더미)`)
+  }
+
+  // 마지막 로봇 제거 (작업 중이면 먼저 취소해야 함)
+  const removeRobot = () => {
+    const name = amrs[amrs.length - 1]
+    if (!name || amrs.length <= 1) return
+    if (activeTaskOf(name)) { setTaskMsg(`${name} 이(가) 작업 중임 — 먼저 취소하세요`); return }
+    setAmrs(a => a.slice(0, -1))
+    setRobotNode(r => { const { [name]: _gone, ...rest } = r; return rest })
+    if (amr === name) setAmr(amrs[0])
+    setTaskMsg(`${name} 제거`)
+  }
+
+  const routePoints = (ids: number[]) =>
+    ids.map(id => byId.get(id)).filter(n => n !== undefined).map(n => `${toPx(n.x)},${toPx(n.y)}`).join(' ')
+
   const ringColor = (id: number) =>
-    mode === 'delete' && hover?.kind === 'node' && hover.id === id ? C_DEL_MODE   // 빨강: 지워질 노드
+    tab === 'manual' && id === fromId ? C_FROM   // 초록: 출발
+    : tab === 'manual' && id === toId ? C_TO     // 빨강: 도착
+    : delMode && hover?.kind === 'node' && hover.id === id ? C_DEL_MODE   // 빨강: 지워질 노드
     : id === candidate?.id ? '#48bb78'   // 초록: 여기에 붙을 것
     : id === dragFrom    ? '#4299e1'   // 파랑: 끌기 시작한 노드
     : id === selected    ? '#ecc94b'   // 노랑: 선택된 노드
     : 'none'
 
   const zoomIdx = ZOOMS.indexOf(zoom)
-  const svgEditable = tab === 'node' || mapEditing   // 지도를 눌러서 뭔가 할 수 있는 탭인지
+  const svgEditable = tab === 'node' || mapEditing || (tab === 'manual' && pick !== null)   // 지도를 눌러서 뭔가 할 수 있는 상태인지
 
   return (
     <div>
@@ -574,6 +722,80 @@ export default function App() {
 
         {tab === 'manual' && (
           <div>
+            <b>이동 명령</b>
+            <p style={{ color: '#718096', fontSize: 13, margin: '4px 0 8px' }}>
+              더미 — AMR 을 고르고 출발·도착 노드를 정하면, 길(일방통행 포함)을 따라 최단 경로로 감
+            </p>
+            <table style={{ borderSpacing: '0 6px', fontSize: 14 }}>
+              <tbody>
+                <tr>
+                  <td>AMR</td>
+                  <td>
+                    <select value={amr} onChange={e => setAmr(e.target.value)}>
+                      {amrs.map(a => (
+                        <option key={a} value={a}>
+                          {a} (현재 {robotNode[a] !== undefined ? nodeName(robotNode[a]) : '—'}{activeTaskOf(a) ? ' · 작업 중' : ''})
+                        </option>
+                      ))}
+                    </select>
+                  </td>
+                </tr>
+                {([['출발', fromId, setFromId, 'from'], ['도착', toId, setToId, 'to']] as const).map(([label, value, setValue, which]) => (
+                  <tr key={which}>
+                    <td>{label}</td>
+                    <td>
+                      <select value={value ?? ''}
+                              onChange={e => setValue(e.target.value === '' ? null : Number(e.target.value))}>
+                        <option value="">노드 선택</option>
+                        {nodes.map(n => <option key={n.id} value={n.id}>{n.name}</option>)}
+                      </select>
+                      {' '}
+                      <button onClick={() => setPick(pick === which ? null : which)}
+                              style={pick === which ? { background: which === 'from' ? C_FROM : C_TO, color: 'white' } : undefined}>
+                        {pick === which ? '지도에서 클릭… (취소)' : '지도에서 선택'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            <div style={{ fontSize: 13, minHeight: 36 }}>
+              {pick !== null ? (
+                <span style={{ color: pick === 'from' ? C_FROM : C_TO }}>
+                  지도에서 {pick === 'from' ? '출발' : '도착'} 노드를 클릭하세요
+                </span>
+              ) : !planReady ? (
+                <span style={{ color: '#718096' }}>
+                  {fromId !== null && fromId === toId ? '출발과 도착이 같은 노드임' : '출발과 도착 노드를 정하세요'}
+                </span>
+              ) : toStart === null ? (
+                <span style={{ color: 'crimson' }}>{amr} 이(가) 현재 위치({nodeName(curNode)})에서 출발 노드({nodeName(fromId)})로 갈 수 없음</span>
+              ) : toDest === null ? (
+                <span style={{ color: 'crimson' }}>출발({nodeName(fromId)}) → 도착({nodeName(toId)}) 경로가 없음. 길이 끊겼거나 일방통행 방향 확인</span>
+              ) : (
+                <>
+                  {toStart.nodes.length > 1 && (
+                    <div>현재 → 출발: {toStart.nodes.map(nodeName).join(' → ')} ({toStart.distance.toFixed(1)} m)</div>
+                  )}
+                  <div>출발 → 도착: <b>{toDest.nodes.map(nodeName).join(' → ')}</b> ({toDest.distance.toFixed(1)} m)</div>
+                </>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', gap: 6, margin: '6px 0' }}>
+              <button disabled={!planOk || activeTaskOf(amr) !== undefined} onClick={onGo}>이동 시작</button>
+              <button onClick={() => goTab('tasks')}>작업목록 보기</button>
+            </div>
+            {activeTaskOf(amr) && (
+              <p style={{ fontSize: 13, color: '#c05621' }}>
+                {amr} 은(는) 이미 작업 중임 — 작업목록에서 취소하거나 수정하세요
+              </p>
+            )}
+            {moveMsg && <p style={{ fontSize: 13, color: '#2f855a' }}>{moveMsg}</p>}
+
+            <div style={{ borderTop: '1px solid #e2e8f0', margin: '10px 0 8px' }} />
+            <b>방향 조작</b>
             <p style={{ color: '#718096', fontSize: 13 }}>더미 — 로봇에 연결 전. 누르면 마지막 명령만 바뀜</p>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 64px)', gap: 6, justifyContent: 'center' }}>
               <span />
@@ -587,6 +809,86 @@ export default function App() {
               <span />
             </div>
             <p>마지막 명령: <b>{lastCmd}</b></p>
+          </div>
+        )}
+
+        {tab === 'tasks' && (
+          <div>
+            <b>작업목록</b>
+            <p style={{ color: '#718096', fontSize: 13, margin: '4px 0 8px' }}>
+              더미 — 진행 중인 이동 작업을 취소하거나 경로를 고칠 수 있음. 앞 노드를 다른 로봇이 점유 중이면 기다림
+            </p>
+
+            {tasks.length === 0 && <p style={{ fontSize: 13, color: '#718096' }}>작업이 없음. 수동 조작 탭에서 이동 명령을 내리면 여기에 쌓임</p>}
+
+            {tasks.map(t => (
+              <div key={t.id}
+                   style={{ border: `2px solid ${isActive(t) ? amrColor(t.amr) : '#e2e8f0'}`, borderRadius: 8, padding: '6px 8px', marginBottom: 8,
+                            opacity: isActive(t) ? 1 : 0.65, fontSize: 13 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <b>#{t.id} · {t.amr}</b>
+                  <span style={{ color: t.status === 'waiting' ? '#c05621' : t.status === 'cancelled' ? '#718096' : '#2f855a' }}>
+                    {STATUS_LABEL[t.status]}{t.status === 'waiting' && t.blockedBy ? ` (${t.blockedBy} 점유)` : ''}
+                  </span>
+                </div>
+                <div>{nodeName(t.from)} 에서 받아 {nodeName(t.to)} 로</div>
+                <div style={{ color: '#4a5568' }}>
+                  {isActive(t)
+                    ? <>남은 경로: <b>{t.path.slice(t.idx).map(nodeName).join(' → ')}</b></>
+                    : <>경로: {t.path.map(nodeName).join(' → ')}</>}
+                </div>
+                {isActive(t) && (
+                  <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                    <button onClick={() => editId === t.id ? setEditId(null) : startEdit(t)}>
+                      {editId === t.id ? '수정 닫기' : '경로 수정'}
+                    </button>
+                    <button onClick={() => cancelTask(t.id)} style={{ color: C_DEL_MODE }}>취소</button>
+                  </div>
+                )}
+                {editId === t.id && (
+                  <div style={{ borderTop: '1px solid #e2e8f0', marginTop: 6, paddingTop: 6 }}>
+                    <div style={{ color: '#718096' }}>
+                      {t.amr} 이(가) 지금 있는 <b>{nodeName(robotNode[t.amr])}</b> 에서 새 경로로 다시 계획함
+                    </div>
+                    <div style={{ margin: '4px 0' }}>
+                      출발{' '}
+                      <select value={editFrom ?? ''} onChange={e => setEditFrom(e.target.value === '' ? null : Number(e.target.value))}>
+                        <option value="">선택</option>
+                        {nodes.map(n => <option key={n.id} value={n.id}>{n.name}</option>)}
+                      </select>
+                      {' '}도착{' '}
+                      <select value={editTo ?? ''} onChange={e => setEditTo(e.target.value === '' ? null : Number(e.target.value))}>
+                        <option value="">선택</option>
+                        {nodes.map(n => <option key={n.id} value={n.id}>{n.name}</option>)}
+                      </select>
+                    </div>
+                    <button onClick={() => applyEdit(t)}>수정 적용</button>
+                  </div>
+                )}
+              </div>
+            ))}
+            {tasks.some(t => !isActive(t)) && <button onClick={clearFinished}>끝난 작업 지우기</button>}
+            {taskMsg && <p style={{ fontSize: 13, color: '#2f855a' }}>{taskMsg}</p>}
+
+            <div style={{ borderTop: '1px solid #e2e8f0', margin: '10px 0 8px' }} />
+            <b>로봇</b>
+            <div style={{ fontSize: 13, margin: '6px 0' }}>
+              {amrs.map(a => {
+                const task = activeTaskOf(a)
+                return (
+                  <div key={a} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                    <span style={{ display: 'inline-block', width: 10, height: 10, borderRadius: 2, background: amrColor(a) }} />
+                    <b>{a}</b>
+                    <span>{robotNode[a] !== undefined ? `${nodeName(robotNode[a])} 노드 점유` : '위치 없음'}</span>
+                    <span style={{ color: '#718096' }}>· {task ? `${STATUS_LABEL[task.status]} (#${task.id})` : '대기'}</span>
+                  </div>
+                )
+              })}
+            </div>
+            <div style={{ display: 'flex', gap: 6 }}>
+              <button onClick={addRobot} disabled={amrs.length >= AMR_PALETTE.length}>더미 로봇 추가</button>
+              <button onClick={removeRobot} disabled={amrs.length <= 1}>마지막 로봇 제거</button>
+            </div>
           </div>
         )}
 
@@ -812,17 +1114,17 @@ export default function App() {
 
           const x1 = t.x1 + nx, y1 = t.y1 + ny, x2 = t.x2 + nx, y2 = t.y2 + ny
           // 삭제 모드에서 마우스가 올라간 길은 빨갛게 (옛 both 길은 두 화살표가 같이 빨개짐)
-          const doomed = mode === 'delete' && hover?.kind === 'edge' && hover.id === ar.edgeId
+          const doomed = delMode && hover?.kind === 'edge' && hover.id === ar.edgeId
 
           return (
             <g key={ar.key}
                onClick={ev => {
                  ev.stopPropagation()
-                 if (mode === 'delete') remove('edges', ar.edgeId)
+                 if (delMode) remove('edges', ar.edgeId)
                }}
-               onMouseEnter={() => { if (mode === 'delete') setHover({ kind: 'edge', id: ar.edgeId }) }}
+               onMouseEnter={() => { if (delMode) setHover({ kind: 'edge', id: ar.edgeId }) }}
                onMouseLeave={() => setHover(null)}
-               style={{ cursor: mode === 'delete' ? 'pointer' : 'inherit' }}>
+               style={{ cursor: delMode ? 'pointer' : 'inherit' }}>
               {/* 보이는 선 */}
               <line x1={x1} y1={y1} x2={x2} y2={y2}
                     stroke={doomed ? C_DEL_MODE : C_ARROW} strokeWidth={doomed ? 3 : 2}
@@ -831,10 +1133,33 @@ export default function App() {
               {/* 안 보이는 두꺼운 선: 얇은 화살표도 대충 눌러서 잡히게 (삭제 모드에서만) */}
               <line x1={x1} y1={y1} x2={x2} y2={y2}
                     stroke="transparent" strokeWidth={12}
-                    style={{ pointerEvents: mode === 'delete' ? 'stroke' : 'none' }} />
+                    style={{ pointerEvents: delMode ? 'stroke' : 'none' }} />
             </g>
           )
         })}
+
+        {/* 수동 조작 탭: 선택한 AMR 의 경로. 회색 점선 = 현재 위치 → 출발, 색 실선 = 출발 → 도착 */}
+        {tab === 'manual' && planReady && (
+          <g style={{ pointerEvents: 'none' }} fill="none" strokeLinejoin="round" strokeLinecap="round">
+            {toStart && toStart.nodes.length > 1 && (
+              <polyline points={routePoints(toStart.nodes)} stroke="#718096" strokeWidth={5} strokeOpacity={0.5} strokeDasharray="2 8" />
+            )}
+            {toDest && (
+              <polyline points={routePoints(toDest.nodes)} stroke={amrColor(amr)} strokeWidth={6} strokeOpacity={0.5} />
+            )}
+          </g>
+        )}
+
+        {/* 작업목록 탭: 진행 중인 작업의 남은 경로. 로봇 색으로, 수정 중인 작업은 더 굵게 */}
+        {tab === 'tasks' && (
+          <g style={{ pointerEvents: 'none' }} fill="none" strokeLinejoin="round" strokeLinecap="round">
+            {tasks.filter(isActive).map(t => (
+              <polyline key={t.id} points={routePoints(t.path.slice(t.idx))}
+                        stroke={amrColor(t.amr)} strokeWidth={t.id === editId ? 8 : 6} strokeOpacity={0.55}
+                        strokeDasharray={t.status === 'waiting' ? '2 8' : undefined} />
+            ))}
+          </g>
+        )}
 
         {/* 끄는 동안 보이는 임시 선 */}
         {preview && (
@@ -849,26 +1174,72 @@ export default function App() {
           <g key={n.id}
             onClick={e => {
               e.stopPropagation()                        // 지도 클릭으로 안 넘김
-              if (mode === 'delete') { remove('nodes', n.id); return }
+              if (tab === 'manual') {                    // 이동 명령에서 "지도에서 선택" 중이면 이 노드를 출발/도착으로
+                if (pick === 'from') setFromId(n.id)
+                else if (pick === 'to') setToId(n.id)
+                setPick(null)
+                return
+              }
+              if (tab !== 'node') return
+              if (delMode) {
+                // 로봇이 서 있는 노드는 지우지 않음 (서버 5단계의 "점유 노드 삭제 거부"를 화면에서 먼저)
+                if (occupied.has(n.id)) { setError(`${n.name} 노드에 로봇이 있어 지울 수 없음`); return }
+                setError('')
+                remove('nodes', n.id)
+                return
+              }
               if (mode !== 'node') return
               if (suppressClick.current) { suppressClick.current = false; return }   // 끌기 끝의 click 은 선택 아님
               setSelected(selected === n.id ? null : n.id) // 다시 누르면 선택 해제
             }}
-            onMouseEnter={() => { if (mode === 'delete') setHover({ kind: 'node', id: n.id }) }}
+            onMouseEnter={() => { if (delMode) setHover({ kind: 'node', id: n.id }) }}
             onMouseLeave={() => setHover(null)}
-            style={{ cursor: mode === 'node' ? 'grab' : mode === 'delete' ? 'pointer' : 'inherit' }}>
+            style={{ cursor: tab === 'manual' ? (pick ? 'pointer' : 'inherit') : mode === 'node' ? 'grab' : delMode ? 'pointer' : 'inherit' }}>
+            {/* 선택·후보·삭제 예정 표시는 노드 바깥에 따로 둘러서, 노드 자체는 항상 검은 테두리를 유지 */}
+            {ringColor(n.id) !== 'none' && (
+              <circle cx={toPx(n.x)} cy={toPx(n.y)} r={NODE_R + 3}
+                      fill="none" stroke={ringColor(n.id)} strokeWidth={3} />
+            )}
+            {/* 비어 있으면 하얀 바탕, 로봇이 있으면(점유) 빨강 */}
             <circle cx={toPx(n.x)} cy={toPx(n.y)} r={NODE_R}
-                    fill={COLOR[n.type]}
-                    stroke={ringColor(n.id)}
-                    strokeWidth={3} />
+                    fill={occupied.has(n.id) ? C_OCCUPIED : 'white'}
+                    stroke={C_NODE_LINE} strokeWidth={1.5} />
+            {n.type !== 'normal' && (
+              <circle cx={toPx(n.x) + NODE_R - 1} cy={toPx(n.y) - NODE_R + 1} r={4}
+                      fill={COLOR[n.type]} stroke="white" strokeWidth={1}
+                      style={{ pointerEvents: 'none' }} />
+            )}
             <text x={toPx(n.x)} y={toPx(n.y) + 3.5}
-                  textAnchor="middle" fill="white"
+                  textAnchor="middle" fill={occupied.has(n.id) ? 'white' : C_NODE_LINE}
                   fontSize={10} fontWeight="bold"
                   style={{ pointerEvents: 'none' }}>
               {n.name}
             </text>
+            {tab === 'manual' && (n.id === fromId || n.id === toId) && (
+              <text x={toPx(n.x)} y={toPx(n.y) + NODE_R + 12}
+                    textAnchor="middle" fontSize={10} fontWeight="bold"
+                    fill={n.id === fromId ? C_FROM : C_TO}
+                    style={{ pointerEvents: 'none' }}>
+                {n.id === fromId ? '출발' : '도착'}
+              </text>
+            )}
           </g>
         ))}
+
+        {/* AMR. 노드 바로 위에 작은 이름표로 그림. 이동 중이면 노드 사이를 미끄러지듯 움직임 */}
+        {tab !== 'mapping' && amrs.map(a => {
+          const nid = robotNode[a]
+          const n = nid !== undefined ? byId.get(nid) : undefined
+          if (!n) return null
+          return (
+            <g key={a}
+               style={{ transform: `translate(${toPx(n.x)}px, ${toPx(n.y)}px)`, transition: `transform ${STEP_MS}ms linear`, pointerEvents: 'none' }}>
+              <rect x={-10} y={-NODE_R - 17} width={20} height={13} rx={3}
+                    fill={amrColor(a)} stroke={a === amr && tab === 'manual' ? '#1a202c' : 'white'} strokeWidth={1.5} />
+              <text x={0} y={-NODE_R - 7} textAnchor="middle" fontSize={9} fontWeight="bold" fill="white">{a}</text>
+            </g>
+          )
+        })}
       </svg>
         </div>
 
@@ -883,6 +1254,10 @@ export default function App() {
           <b style={{ color: C_ARROW }}>화살표 한 줄</b> = 그 방향으로만 갈 수 있음
           {' · '}
           <b style={{ color: C_ARROW }}>화살표 두 줄</b> = 양방(서로 반대 방향)
+          {' · '}
+          <b>하얀 노드</b> = 비어 있음
+          {' · '}
+          <b style={{ color: C_OCCUPIED }}>빨간 노드</b> = 로봇이 있음(점유)
         </p>
       )}
       </div>
