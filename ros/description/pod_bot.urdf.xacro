@@ -54,6 +54,10 @@
   <xacro:property name="plate_z"   value="0.305"/>  <!-- 내렸을 때 플레이트 중심 -->
   <xacro:property name="lift_travel" value="0.16"/>
 
+  <!-- 가감속 한계 (m/s^2). 포드를 든 채 급정지하면 포드가 밀린다.
+       min 쪽(감속)을 안 걸면 DiffDrive 가 속도를 즉시 0 으로 떨군다. -->
+  <xacro:property name="accel_lim" value="1.0"/>
+
   <xacro:property name="deck_z"  value="0.27"/>    <!-- 차체 윗판 -->
   <xacro:property name="cam_z"   value="0.295"/>
   <xacro:property name="lidar_x" value="0.325"/>
@@ -363,7 +367,8 @@
       <right_joint>wheel_right_joint</right_joint>
       <wheel_separation>${2 * wheel_y}</wheel_separation>
       <wheel_radius>${wheel_r}</wheel_radius>
-      <max_linear_acceleration>1.0</max_linear_acceleration>
+      <max_linear_acceleration>${accel_lim}</max_linear_acceleration>
+      <min_linear_acceleration>${-accel_lim}</min_linear_acceleration>
       <topic>/${ns}/cmd_vel</topic>
       <odom_topic>/${ns}/odom</odom_topic>
       <tf_topic>/${ns}/tf</tf_topic>
