@@ -18,13 +18,14 @@ const C_ARROW = '#805ad5'   // 길 화살표 색 (보라). 방향 하나 = 화�
 const LANE = 7             // 양방일 때 두 화살표를 이 픽셀만큼 옆으로 벌림 (서로 반대쪽으로)
 const C_NODE_MODE = '#2b6cb0'   // 노드 모드 색 (파랑)
 const C_EDGE_MODE = '#805ad5'   // 길 모드 색 (보라) — 일방통행 보라와 같은 "길" 계열
+const C_DEL_MODE  = '#e53e3e'   // 삭제 모드 색 (빨강). 지워질 대상도 이 색으로 미리 보여줌
 
 // 모드 전환 버튼. 현재 모드는 색이 꽉 차고, 아닌 쪽은 테두리만 있음
-const modeBtn = (active: boolean, side: 'left' | 'right', color: string): React.CSSProperties => ({
+const modeBtn = (active: boolean, side: 'left' | 'mid' | 'right', color: string): React.CSSProperties => ({
   padding: '7px 18px',
   border: `2px solid ${color}`,
-  borderRadius: side === 'left' ? '8px 0 0 8px' : '0 8px 8px 0',
-  marginLeft: side === 'right' ? -2 : 0,
+  borderRadius: side === 'left' ? '8px 0 0 8px' : side === 'right' ? '0 8px 8px 0' : 0,
+  marginLeft: side === 'left' ? 0 : -2,
   background: active ? color : 'white',
   color: active ? 'white' : color,
   fontWeight: active ? 700 : 500,
@@ -39,7 +40,15 @@ const COLOR = {
 }
 
 type Pt = { x: number; y: number }   // 화면(SVG) 픽셀 좌표
-type Mode = 'node' | 'edge'          // 노드 모드 / 길 모드
+type Mode = 'node' | 'edge' | 'delete'   // 노드 모드 / 길 모드 / 삭제 모드
+type Target = { kind: 'node' | 'edge'; id: number }   // 삭제 모드에서 마우스가 올라간 대상
+
+const MODE_COLOR: Record<Mode, string> = { node: C_NODE_MODE, edge: C_EDGE_MODE, delete: C_DEL_MODE }
+const MODE_LABEL: Record<Mode, string> = {
+  node: '노드 모드 (점 찍기)',
+  edge: '길 모드 (길 잇기)',
+  delete: '삭제 모드 (누르면 바로 삭제)',
+}
 
 const toPx = (m: number) => m * SCALE + PAD          // 미터 → 픽셀 (그릴 때)
 const toM  = (px: number) => (px - PAD) / SCALE      // 픽셀 → 미터 (클릭할 때)
@@ -65,6 +74,7 @@ export default function App() {
   const [edges, setEdges] = useState<MapEdge[]>([])
   const [error, setError] = useState('')
   const [selected, setSelected] = useState<number | null>(null)   // 선택한 노드 id (노드 모드)
+  const [hover, setHover] = useState<Target | null>(null)         // 삭제 모드: 마우스가 올라간 대상 (빨갛게 미리 보여줌)
 
   const [mode, setMode] = useState<Mode>('node')
   const [dragFrom, setDragFrom] = useState<number | null>(null) // 끌기를 시작한 노드 id
@@ -109,6 +119,7 @@ export default function App() {
     if (m === mode) return   // 이미 그 모드면 아무것도 안 함
     setMode(m)
     setSelected(null)
+    setHover(null)
     setDragFrom(null)
     setCursor(null)
     setMoving(null)
@@ -146,17 +157,20 @@ export default function App() {
     await load()
   }
 
-  const onDelete = async () => {
-    if (selected === null) return
-    const res = await fetch(`${API}/nodes/${selected}`, { method: 'DELETE' })
+  // 노드·길 삭제. 노드를 지우면 이어진 길도 DB 가 같이 지움
+  const remove = async (kind: 'nodes' | 'edges', id: number) => {
+    const res = await fetch(`${API}/${kind}/${id}`, { method: 'DELETE' })
     if (!res.ok) {
-      setError((await res.json()).error)
-      return
+      setError((await res.json().catch(() => null))?.error ?? '삭제하지 못함')
+    } else {
+      setError('')
     }
-    setError('')
-    setSelected(null) // 지웠으니 선택해제
+    setHover(null)
+    if (kind === 'nodes' && selected === id) setSelected(null)
     await load()
   }
+
+  const onDelete = () => { if (selected !== null) remove('nodes', selected) }
 
   // ---------- 길 모드: 노드 근처에서 눌러 다른 노드 쪽으로 끌기 = 길 잇기 ----------
   const onMouseDown = (e: React.MouseEvent<SVGSVGElement>) => {
@@ -288,7 +302,8 @@ export default function App() {
   }
 
   const ringColor = (id: number) =>
-    id === candidate?.id ? '#48bb78'   // 초록: 여기에 붙을 것
+    mode === 'delete' && hover?.kind === 'node' && hover.id === id ? C_DEL_MODE   // 빨강: 지워질 노드
+    : id === candidate?.id ? '#48bb78'   // 초록: 여기에 붙을 것
     : id === dragFrom    ? '#4299e1'   // 파랑: 끌기 시작한 노드
     : id === selected    ? '#ecc94b'   // 노랑: 선택된 노드
     : 'none'
@@ -304,13 +319,15 @@ export default function App() {
             노드 모드
           </button>
           <button onClick={() => changeMode('edge')}
-                  style={modeBtn(mode === 'edge', 'right', C_EDGE_MODE)}>
+                  style={modeBtn(mode === 'edge', 'mid', C_EDGE_MODE)}>
             길 모드
           </button>
+          <button onClick={() => changeMode('delete')}
+                  style={modeBtn(mode === 'delete', 'right', C_DEL_MODE)}>
+            삭제 모드
+          </button>
         </span>
-        <b style={{ color: mode === 'node' ? C_NODE_MODE : C_EDGE_MODE }}>
-          현재: {mode === 'node' ? '노드 모드 (점 찍기)' : '길 모드 (길 잇기)'}
-        </b>
+        <b style={{ color: MODE_COLOR[mode] }}>현재: {MODE_LABEL[mode]}</b>
       </p>
 
       {mode === 'node' ? (
@@ -321,9 +338,13 @@ export default function App() {
             선택한 노드 삭제
           </button>
         </p>
-      ) : (
+      ) : mode === 'edge' ? (
         <p>
           노드 근처를 눌러 다른 노드 쪽으로 끌기 = 끈 방향으로 화살표 하나 · 반대로 또 끌면 양방(화살표 두 줄)
+        </p>
+      ) : (
+        <p>
+          화살표를 누르면 그 길이 · 노드를 누르면 그 노드(이어진 길 포함)가 <b style={{ color: C_DEL_MODE }}>바로 삭제</b>됨
         </p>
       )}
 
@@ -334,9 +355,9 @@ export default function App() {
         height={VIEW_H * SCALE + PAD * 2}
         style={{
           background: '#f7fafc',
-          cursor: mode === 'node' ? 'crosshair' : 'grab',
+          cursor: mode === 'node' ? 'crosshair' : mode === 'edge' ? 'grab' : 'default',
           // 지도 테두리 색으로도 모드를 알림. outline 은 크기에 안 들어가서 클릭 좌표 계산이 안 어긋남
-          outline: `3px solid ${mode === 'node' ? C_NODE_MODE : C_EDGE_MODE}`,
+          outline: `3px solid ${MODE_COLOR[mode]}`,
           userSelect: 'none',
         }}
         onClick={onMapClick}
@@ -352,6 +373,11 @@ export default function App() {
                   markerUnits="userSpaceOnUse" markerWidth="18" markerHeight="18"
                   orient="auto">
             <path d="M 0 0 L 10 5 L 0 10 z" fill={C_ARROW} />
+          </marker>
+          <marker id="arrow-delete" viewBox="0 0 10 10" refX="10" refY="5"
+                  markerUnits="userSpaceOnUse" markerWidth="18" markerHeight="18"
+                  orient="auto">
+            <path d="M 0 0 L 10 5 L 0 10 z" fill={C_DEL_MODE} />
           </marker>
           <marker id="arrow-preview" viewBox="0 0 10 10" refX="10" refY="5"
                   markerUnits="userSpaceOnUse" markerWidth="18" markerHeight="18"
@@ -378,11 +404,28 @@ export default function App() {
           const ny =  (pb.x - pa.x) / len * ar.offset
 
           const x1 = t.x1 + nx, y1 = t.y1 + ny, x2 = t.x2 + nx, y2 = t.y2 + ny
+          // 삭제 모드에서 마우스가 올라간 길은 빨갛게 (옛 both 길은 두 화살표가 같이 빨개짐)
+          const doomed = mode === 'delete' && hover?.kind === 'edge' && hover.id === ar.edgeId
+
           return (
-            <line key={ar.key}
-              x1={x1} y1={y1} x2={x2} y2={y2}
-              stroke={C_ARROW} strokeWidth={4}
-              markerEnd="url(#arrow)" />
+            <g key={ar.key}
+               onClick={ev => {
+                 ev.stopPropagation()
+                 if (mode === 'delete') remove('edges', ar.edgeId)
+               }}
+               onMouseEnter={() => { if (mode === 'delete') setHover({ kind: 'edge', id: ar.edgeId }) }}
+               onMouseLeave={() => setHover(null)}
+               style={{ cursor: mode === 'delete' ? 'pointer' : 'inherit' }}>
+              {/* 보이는 선 */}
+              <line x1={x1} y1={y1} x2={x2} y2={y2}
+                    stroke={doomed ? C_DEL_MODE : C_ARROW} strokeWidth={doomed ? 6 : 4}
+                    markerEnd={doomed ? 'url(#arrow-delete)' : 'url(#arrow)'}
+                    style={{ pointerEvents: 'none' }} />
+              {/* 안 보이는 두꺼운 선: 얇은 화살표도 대충 눌러서 잡히게 (삭제 모드에서만) */}
+              <line x1={x1} y1={y1} x2={x2} y2={y2}
+                    stroke="transparent" strokeWidth={14}
+                    style={{ pointerEvents: mode === 'delete' ? 'stroke' : 'none' }} />
+            </g>
           )
         })}
 
@@ -399,11 +442,14 @@ export default function App() {
           <g key={n.id}
             onClick={e => {
               e.stopPropagation()                        // 지도 클릭으로 안 넘김
+              if (mode === 'delete') { remove('nodes', n.id); return }
               if (mode !== 'node') return
               if (suppressClick.current) { suppressClick.current = false; return }   // 끌기 끝의 click 은 선택 아님
               setSelected(selected === n.id ? null : n.id) // 다시 누르면 선택 해제
             }}
-            style={{ cursor: mode === 'node' ? 'grab' : 'inherit' }}>
+            onMouseEnter={() => { if (mode === 'delete') setHover({ kind: 'node', id: n.id }) }}
+            onMouseLeave={() => setHover(null)}
+            style={{ cursor: mode === 'node' ? 'grab' : mode === 'delete' ? 'pointer' : 'inherit' }}>
             <circle cx={toPx(n.x)} cy={toPx(n.y)} r={NODE_R}
                     fill={COLOR[n.type]}
                     stroke={ringColor(n.id)}
