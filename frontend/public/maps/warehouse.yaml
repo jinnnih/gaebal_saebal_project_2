@@ -1,0 +1,10 @@
+# 더미 매핑 지도 (Gazebo 물류센터 월드를 본뜬 것). ROS map_saver 형식과 같은 항목.
+# 실제 지도로 바꿀 때 이 두 파일(png, yaml)만 교체.
+# 주의: 이 더미는 화면과 같게 "왼쪽 위"가 (0,0), y 아래로 증가.
+#       실제 ROS 지도는 origin 이 "왼쪽 아래", y 위로 증가 -> 교체 때 y 뒤집기 필요.
+image: warehouse.png
+resolution: 0.05
+origin: [0.0, 0.0, 0.0]
+negate: 0
+occupied_thresh: 0.65
+free_thresh: 0.25
