@@ -25,6 +25,7 @@ export default function App() {
   const [nodes, setNodes] = useState<MapNode[]>([])
   const [edges, setEdges] = useState<MapEdge[]>([])
   const [error, setError] = useState('')
+  const [selected, setSelected] = useState<number | null>(null)
 
   const load = () =>
     fetch(`${API}/map`)
@@ -60,12 +61,30 @@ export default function App() {
     await load()
   }
 
+  const onDelete = async () => {
+    if (selected === null) return
+    const res = await fetch(`${API}/nodes/${selected}`, { method:'DELETE' })
+    if (!res.ok) {
+      setError((await res.json()).error)
+      return
+    }
+    setError('')
+    setSelected(null) // 지웠으니 선택해제
+    await load()
+  }
+
   const byId = new Map(nodes.map(n => [n.id, n]))
 
   return (
     <div>
       <h1>노드 지도</h1>
-      <p>빈 곳을 클릭하면 노드가 생깁니다 (격자 {GRID}m)</p>
+      <p>
+      빈 곳 클릭 = 노드 추가 · 노드 클릭 = 선택 (격자 {GRID}m)
+      {' '}
+      <button onClick={onDelete} disabled={selected === null}>
+        선택한 노드 삭제
+      </button>
+    </p>
       {error && <p style={{ color: 'crimson' }}>{error}</p>}
 
       <svg
@@ -86,17 +105,25 @@ export default function App() {
           )
         })}
 
-        {nodes.map(n => (
-          <g key={n.id}>
-            <circle cx={toPx(n.x)} cy={toPx(n.y)} r={18} fill={COLOR[n.type]} />
-            <text x={toPx(n.x)} y={toPx(n.y) + 5}
-                  textAnchor="middle" fill="white"
-                  fontSize={14} fontWeight="bold"
-                  style={{ pointerEvents: 'none' }}>
-              {n.name}
-            </text>
-          </g>
-        ))}
+      {nodes.map(n => (
+        <g key={n.id}
+          onClick={e => {
+            e.stopPropagation()                         // 지도 클릭으로 안 넘김
+            setSelected(selected === n.id ? null : n.id) // 다시 누르면 선택 해제
+          }}
+          style={{ cursor: 'pointer' }}>
+          <circle cx={toPx(n.x)} cy={toPx(n.y)} r={18}
+                  fill={COLOR[n.type]}
+                  stroke={selected === n.id ? '#ecc94b' : 'none'}
+                  strokeWidth={4} />
+          <text x={toPx(n.x)} y={toPx(n.y) + 5}
+                textAnchor="middle" fill="white"
+                fontSize={14} fontWeight="bold"
+                style={{ pointerEvents: 'none' }}>
+            {n.name}
+          </text>
+        </g>
+      ))}
       </svg>
     </div>
   )
