@@ -29,7 +29,9 @@
   <world name="warehouse">
 
     <physics name="1ms" type="ignored">
-      <max_step_size>0.001</max_step_size>
+      <!-- 포드 18개(각 5개 충돌체)와 로봇 2대가 들어가면 0.001 로는 VM 에서
+           실시간 대비 0.2 배도 안 나온다. 0.002 로 늘려 배율을 올린다. -->
+      <max_step_size>0.002</max_step_size>
       <real_time_factor>1.0</real_time_factor>
     </physics>
 
@@ -41,7 +43,9 @@
             name="gz::sim::systems::SceneBroadcaster"/>
     <plugin filename="gz-sim-sensors-system"
             name="gz::sim::systems::Sensors">
-      <render_engine>ogre2</render_engine>
+      <!-- 센서 렌더는 ogre 로 한다. VMware 의 SVGA3D 에서 ogre2 로 두면
+           헤드리스일 때 gpu_lidar 가 전부 inf 를 뱉는다. -->
+      <render_engine>ogre</render_engine>
     </plugin>
     <plugin filename="gz-sim-imu-system"
             name="gz::sim::systems::Imu"/>
@@ -2242,7 +2246,7 @@
              서버 쪽은 바뀌는 게 없다 (계획서 9장). -->
         <visual name="marker">
           <pose>0 0 0.418 0 0 0</pose>
-          <geometry><box><size>0.6 0.6 0.004</size></box></geometry>
+          <geometry><box><size>0.4 0.4 0.004</size></box></geometry>
           <material>
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
@@ -2443,7 +2447,7 @@
              서버 쪽은 바뀌는 게 없다 (계획서 9장). -->
         <visual name="marker">
           <pose>0 0 0.418 0 0 0</pose>
-          <geometry><box><size>0.6 0.6 0.004</size></box></geometry>
+          <geometry><box><size>0.4 0.4 0.004</size></box></geometry>
           <material>
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
@@ -2644,7 +2648,7 @@
              서버 쪽은 바뀌는 게 없다 (계획서 9장). -->
         <visual name="marker">
           <pose>0 0 0.418 0 0 0</pose>
-          <geometry><box><size>0.6 0.6 0.004</size></box></geometry>
+          <geometry><box><size>0.4 0.4 0.004</size></box></geometry>
           <material>
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
@@ -2845,7 +2849,7 @@
              서버 쪽은 바뀌는 게 없다 (계획서 9장). -->
         <visual name="marker">
           <pose>0 0 0.418 0 0 0</pose>
-          <geometry><box><size>0.6 0.6 0.004</size></box></geometry>
+          <geometry><box><size>0.4 0.4 0.004</size></box></geometry>
           <material>
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
@@ -3046,7 +3050,7 @@
              서버 쪽은 바뀌는 게 없다 (계획서 9장). -->
         <visual name="marker">
           <pose>0 0 0.418 0 0 0</pose>
-          <geometry><box><size>0.6 0.6 0.004</size></box></geometry>
+          <geometry><box><size>0.4 0.4 0.004</size></box></geometry>
           <material>
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
@@ -3247,7 +3251,7 @@
              서버 쪽은 바뀌는 게 없다 (계획서 9장). -->
         <visual name="marker">
           <pose>0 0 0.418 0 0 0</pose>
-          <geometry><box><size>0.6 0.6 0.004</size></box></geometry>
+          <geometry><box><size>0.4 0.4 0.004</size></box></geometry>
           <material>
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
@@ -3448,7 +3452,7 @@
              서버 쪽은 바뀌는 게 없다 (계획서 9장). -->
         <visual name="marker">
           <pose>0 0 0.418 0 0 0</pose>
-          <geometry><box><size>0.6 0.6 0.004</size></box></geometry>
+          <geometry><box><size>0.4 0.4 0.004</size></box></geometry>
           <material>
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
@@ -3649,7 +3653,7 @@
              서버 쪽은 바뀌는 게 없다 (계획서 9장). -->
         <visual name="marker">
           <pose>0 0 0.418 0 0 0</pose>
-          <geometry><box><size>0.6 0.6 0.004</size></box></geometry>
+          <geometry><box><size>0.4 0.4 0.004</size></box></geometry>
           <material>
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
@@ -3850,7 +3854,7 @@
              서버 쪽은 바뀌는 게 없다 (계획서 9장). -->
         <visual name="marker">
           <pose>0 0 0.418 0 0 0</pose>
-          <geometry><box><size>0.6 0.6 0.004</size></box></geometry>
+          <geometry><box><size>0.4 0.4 0.004</size></box></geometry>
           <material>
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
@@ -4051,7 +4055,7 @@
              서버 쪽은 바뀌는 게 없다 (계획서 9장). -->
         <visual name="marker">
           <pose>0 0 0.418 0 0 0</pose>
-          <geometry><box><size>0.6 0.6 0.004</size></box></geometry>
+          <geometry><box><size>0.4 0.4 0.004</size></box></geometry>
           <material>
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
@@ -4252,7 +4256,7 @@
              서버 쪽은 바뀌는 게 없다 (계획서 9장). -->
         <visual name="marker">
           <pose>0 0 0.418 0 0 0</pose>
-          <geometry><box><size>0.6 0.6 0.004</size></box></geometry>
+          <geometry><box><size>0.4 0.4 0.004</size></box></geometry>
           <material>
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
@@ -4453,7 +4457,7 @@
              서버 쪽은 바뀌는 게 없다 (계획서 9장). -->
         <visual name="marker">
           <pose>0 0 0.418 0 0 0</pose>
-          <geometry><box><size>0.6 0.6 0.004</size></box></geometry>
+          <geometry><box><size>0.4 0.4 0.004</size></box></geometry>
           <material>
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
@@ -4654,7 +4658,7 @@
              서버 쪽은 바뀌는 게 없다 (계획서 9장). -->
         <visual name="marker">
           <pose>0 0 0.418 0 0 0</pose>
-          <geometry><box><size>0.6 0.6 0.004</size></box></geometry>
+          <geometry><box><size>0.4 0.4 0.004</size></box></geometry>
           <material>
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
@@ -4855,7 +4859,7 @@
              서버 쪽은 바뀌는 게 없다 (계획서 9장). -->
         <visual name="marker">
           <pose>0 0 0.418 0 0 0</pose>
-          <geometry><box><size>0.6 0.6 0.004</size></box></geometry>
+          <geometry><box><size>0.4 0.4 0.004</size></box></geometry>
           <material>
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
@@ -5056,7 +5060,7 @@
              서버 쪽은 바뀌는 게 없다 (계획서 9장). -->
         <visual name="marker">
           <pose>0 0 0.418 0 0 0</pose>
-          <geometry><box><size>0.6 0.6 0.004</size></box></geometry>
+          <geometry><box><size>0.4 0.4 0.004</size></box></geometry>
           <material>
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
@@ -5257,7 +5261,7 @@
              서버 쪽은 바뀌는 게 없다 (계획서 9장). -->
         <visual name="marker">
           <pose>0 0 0.418 0 0 0</pose>
-          <geometry><box><size>0.6 0.6 0.004</size></box></geometry>
+          <geometry><box><size>0.4 0.4 0.004</size></box></geometry>
           <material>
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
@@ -5458,7 +5462,7 @@
              서버 쪽은 바뀌는 게 없다 (계획서 9장). -->
         <visual name="marker">
           <pose>0 0 0.418 0 0 0</pose>
-          <geometry><box><size>0.6 0.6 0.004</size></box></geometry>
+          <geometry><box><size>0.4 0.4 0.004</size></box></geometry>
           <material>
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>
@@ -5659,7 +5663,7 @@
              서버 쪽은 바뀌는 게 없다 (계획서 9장). -->
         <visual name="marker">
           <pose>0 0 0.418 0 0 0</pose>
-          <geometry><box><size>0.6 0.6 0.004</size></box></geometry>
+          <geometry><box><size>0.4 0.4 0.004</size></box></geometry>
           <material>
             <ambient>1 1 1 1</ambient>
             <diffuse>1 1 1 1</diffuse>

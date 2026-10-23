@@ -58,8 +58,13 @@ ros/
   gen_map.py        ← 평면도. 지도를 고칠 때 여기만 고친다
   gen_gridmap.py    ← 월드에서 Nav2 점유 격자 생성
   check_map.py      ← 월드와 평면도가 맞는지 검사
+  check_robot.py    ← 로봇 치수가 포드·지도에 맞는지 검사
   preview_map.py    ← 평면도 PNG 렌더 (Gazebo 없이 확인)
-  run_sim.sh        ← ROS 소싱 + 경로 설정 + 실행
+  run_sim.sh        ← 월드만 띄운다 (ROS 소싱 + 경로 설정 포함)
+  description/pod_bot.urdf.xacro    로봇 모델
+  launch/warehouse.launch.py        월드 + 로봇 2대 + 브리지
+  config/bridge.yaml                gz <-> ROS 토픽 매핑
+  scripts/drive_to.py               손으로 몰아보는 도구
   worlds/warehouse.sdf                        (생성물)
   maps/warehouse.pgm / warehouse.yaml         (생성물) Nav2 점유 격자
   models/pod_markers/materials/textures/
@@ -207,7 +212,8 @@ ROS vendor 빌드라 `source /opt/ros/jazzy/setup.bash` 없이는 `gz: command n
 5. 도착하면 `lower`, 포드 위치를 `K2` 로 갱신
 
 포드 제원: 데크 1.00 × 1.00 m, 바닥~데크 밑면 **0.42 m**(로봇이 들어갈 높이),
-다리 사이 통과 폭 0.76 m, 질량 9 kg, 밑면 마커판 0.60 × 0.60 m.
+다리 사이 통과 폭 0.76 m, 질량 9 kg, 밑면 마커판 0.40 × 0.40 m
+(위를 보는 카메라 화각에 맞춘 크기 — 아래 로봇 절 참고).
 
 - QR 이 불안정하면 `gen_map.py` 의 `albedo_map` 을 `aruco_S*.png` 로 바꾼다.
   서버 쪽은 바뀌는 게 없다 (계획서 9장)
@@ -218,10 +224,107 @@ ROS vendor 빌드라 `source /opt/ros/jazzy/setup.bash` 없이는 `gz: command n
 > 규칙은 "선반은 적재(load) 노드에만 놓는다" 다. 이 지도는 규칙을 따라
 > 지정 위치 `K2` / `K3` 를 `load` 로 두었다.
 
+## 로봇 (pod_bot)
+
+Kiva 형 저상 AGV. 포드 밑으로 들어가 원형 리프트 플레이트로 들어올려 옮긴다.
+`description/pod_bot.urdf.xacro` 하나이고 `ns` 인자로 네임스페이스를 바꾼다.
+
+```bash
+xacro description/pod_bot.urdf.xacro ns:=robot1 > robot1.urdf
+```
+
+| 항목 | 값 | 왜 이 값인가 |
+|---|---|---|
+| 크기 | 0.62 × 0.50 m, 전폭 0.55 m | 포드 다리 사이 0.76 m 에 좌우 0.105 m 여유 |
+| 최고점 (리프트 내림) | 0.328 m | 포드 데크 밑면 0.42 m 아래로 0.092 m 여유 |
+| 리프트 행정 | 0.16 m → 0.488 m | 포드 다리를 0.068 m 띄운다 |
+| 제자리 회전 외접 반경 | 0.414 m | 격자 2.5 m 한 칸 안에서 돈다 |
+| 질량 | 20 kg | |
+
+포드(데크 1.0 m) 대비 0.62 배다. 실제 Kiva 비율(포드 1.2 m / 로봇 0.75 m)과 같다.
+
+### 모양
+
+메시 파일 없이 기본 도형만 쓴다. 박스 하나로 두면 로봇으로 안 보이므로
+모서리를 둥글린 차체(가로 박스 + 세로 박스 + 모서리 원기둥 4개), 바닥 범퍼,
+**팔각 링 모양 주황 리프트 플레이트**, 밖으로 나온 바퀴, 뒤쪽 상태 표시등,
+앞쪽 라이다 터렛을 조합했다.
+
+리프트 플레이트를 **가운데가 뚫린 링**으로 만든 건 모양 때문만이 아니다.
+위를 보는 카메라가 그 구멍으로 포드 데크 밑면 마커를 본다. 충돌체는 꽉 찬 판
+하나인데, 충돌체는 렌더링되지 않으므로 카메라 시야를 막지 않는다.
+`check_robot.py` 가 링 조각 8개가 모두 중심축을 비켜 있는지 검사한다.
+
+### 토픽
+
+| ROS 토픽 | 방향 | 내용 |
+|---|---|---|
+| `/{ns}/cmd_vel` | 입력 | `geometry_msgs/Twist` |
+| `/{ns}/lift/cmd` | 입력 | `std_msgs/Float64` 목표 높이 m (0.0 내림 / 0.16 올림) |
+| `/{ns}/odom` | 출력 | `nav_msgs/Odometry` |
+| `/{ns}/scan` | 출력 | 270도, 360 샘플, 0.10~12 m |
+| `/{ns}/pod_cam/image` | 출력 | 위를 보는 카메라, FOV 2.3 rad, 3 Hz |
+| `/{ns}/imu`, `/{ns}/joint_states`, `/{ns}/tf` | 출력 | |
+
+`config/bridge.yaml` 이 gz ↔ ROS 를 잇는다.
+
+### 실행
+
+```bash
+ros2 launch launch/warehouse.launch.py              # GUI
+ros2 launch launch/warehouse.launch.py gui:=false   # 헤드리스
+python3 check_robot.py                              # 치수 검사 (FAIL 0 이어야 한다)
+python3 scripts/drive_to.py robot1 --forward 2.5    # 손으로 몰아보기
+```
+
+### 빠지기 쉬운 함정 세 가지 (전부 실측으로 걸렸다)
+
+**1. 센서 렌더링에는 `LIBGL_ALWAYS_SOFTWARE=1` 이 필요하다.**
+VMware 의 SVGA3D 드라이버는 오프스크린 GPU 센서 렌더링을 못 한다. 그냥 두면
+라이다가 거리와 무관하게 늘 같은 값을 뱉는다. 실측한 조합:
+
+```
+엔진   LIBGL_ALWAYS_SOFTWARE   라이다
+ogre   0                       실패 (전부 range_min)
+ogre   1                       정상
+ogre2  0                       실패 (전부 inf)
+ogre2  1                       정상
+```
+
+`run_sim.sh` 와 launch 가 **서버에만** 이 변수를 준다. GUI 는 화면에 그리는
+것뿐이라 하드웨어 가속을 그대로 쓴다.
+
+**2. 로봇 스폰이 너무 이르면 GUI 에 안 그려진다.**
+물리에는 멀쩡히 들어가서 odom 도 나오고 주행도 되는데 화면에만 없다.
+월드가 크면(포드 18개) 더 심하다. launch 의 `SPAWN_AT` 을 16초로 두고
+두 대를 3초 어긋나게 띄운다. 로봇이 안 보이면 이걸 먼저 의심해라.
+
+**3. 열린 루프로 몇 초 달리게 하면 안 맞는다.**
+실시간 배율이 0.3 안팎이고 흔들려서, 같은 명령이 2.5 m 가 되기도 3.4 m 가
+되기도 한다. `scripts/drive_to.py` 가 odom 으로 거리를 재서 멈춘다.
+처음엔 `gz model -p` 로 참값을 폴링했는데 그 호출이 수 초씩 걸려 표본 사이에
+0.54 m 씩 지나쳤다. 토픽을 써야 한다.
+
+### 확인한 동작
+
+```
+check_robot.py                        FAIL 0
+라이다                                 유한 241/360, 서로 다른 값 133, 0.11~11.93 m
+포드 들기                              z 0.000 -> 0.059
+포드 싣고 2.5 m 이동                    포드와 어긋남 0.000 m, 포드 z 유지
+내려놓기                               z -> 0.000 (바닥)
+포드 운반 왕복                          y=5.0 에서 집어 y=7.47 에 내려놓음
+```
+
+포드는 마찰만으로 직진 운반을 버틴다. 급회전은 아직 안 해 봤고, 계획서 9장이
+권한 `detachable_joint` 가 확실한 방법이다.
+
 ## 남은 것
 
-- **로봇 모델이 없다.** 라이다 + 차동구동 + 리프트 관절 URDF 가 다음 차례다.
-  그게 있어야 Nav2 도, 진짜 SLAM 도 돌릴 수 있다. 그때 이 점유 격자가 **정답지** 역할을 한다.
+- **Nav2 와 진짜 SLAM 은 아직이다.** 로봇 모델이 생겼으니 돌릴 수 있다.
+  SLAM 결과는 이 점유 격자와 겹쳐 보면 오차가 그대로 나온다.
+- **포드를 든 채 회전**은 아직 시험하지 않았다. 마찰로 버티는 중이라
+  `detachable_joint` 로 바꿔야 할 수 있다.
 - **VM 네트워크가 죽어 있다.** 호스트에서 ping/SSH 가 안 되고, 게스트 안에서도
   gz-transport 가 `Couldn't find a preferred IP via getifaddrs()` 경고를 내며
   127.0.0.1 로 떨어진다. 전부 게스트 안에서 돌리면 문제없지만, Express 서버를

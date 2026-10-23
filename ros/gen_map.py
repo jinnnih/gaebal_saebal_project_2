@@ -281,7 +281,7 @@ DECK_T = 0.06
 LEG = 0.08
 LEG_H = 0.42         # 바닥 ~ 데크 밑면 = 로봇이 들어갈 높이
 LEG_OFF = 0.42       # 다리 중심의 축 거리 -> 안쪽 통과 폭 0.76m
-MARK = 0.60
+MARK = 0.40            # 위를 보는 카메라 화각에 맞춘 크기. ros/description/pod_bot.urdf.xacro 참고
 POD_MASS = 9.0
 POD_LEVELS = (0.52, 1.02)
 POD_TOP = LEG_H + POD_LEVELS[-1] + 0.12
@@ -522,7 +522,9 @@ def build_world():
   <world name="warehouse">
 
     <physics name="1ms" type="ignored">
-      <max_step_size>0.001</max_step_size>
+      <!-- 포드 18개(각 5개 충돌체)와 로봇 2대가 들어가면 0.001 로는 VM 에서
+           실시간 대비 0.2 배도 안 나온다. 0.002 로 늘려 배율을 올린다. -->
+      <max_step_size>0.002</max_step_size>
       <real_time_factor>1.0</real_time_factor>
     </physics>
 
@@ -534,7 +536,9 @@ def build_world():
             name="gz::sim::systems::SceneBroadcaster"/>
     <plugin filename="gz-sim-sensors-system"
             name="gz::sim::systems::Sensors">
-      <render_engine>ogre2</render_engine>
+      <!-- 센서 렌더는 ogre 로 한다. VMware 의 SVGA3D 에서 ogre2 로 두면
+           헤드리스일 때 gpu_lidar 가 전부 inf 를 뱉는다. -->
+      <render_engine>ogre</render_engine>
     </plugin>
     <plugin filename="gz-sim-imu-system"
             name="gz::sim::systems::Imu"/>

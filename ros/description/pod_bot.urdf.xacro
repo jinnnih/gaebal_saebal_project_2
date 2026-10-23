@@ -1,0 +1,405 @@
+<?xml version="1.0"?>
+<!--
+  PROJECT_2 포드 운반 로봇 (pod_bot)
+
+  Kiva 형 저상 AGV. 포드 밑으로 들어가 원형 리프트 플레이트로 들어올려
+  지정 위치에 내려놓는다.
+
+  ─ 치수는 포드에 물려 있다 (ros/gen_map.py 의 포드 제원) ──────────────
+    포드 다리 사이 통과 폭  0.76 m  ->  로봇 전폭 0.55 m  (좌우 여유 0.105)
+    포드 데크 밑면          0.42 m  ->  로봇 최고점 0.328 m (여유 0.092)
+    포드를 띄우려면 0.47 m  ->  플레이트 0.328 + 행정 0.16 = 0.488 m
+
+  ─ 모양 ───────────────────────────────────────────────────────────────
+    네모 박스 하나로 두면 로봇처럼 안 보인다. 기본 도형만으로
+      · 모서리를 둥글린 차체 (가로 박스 + 세로 박스 + 모서리 원기둥 4개)
+      · 바닥 범퍼 스커트
+      · 팔각 링 모양 주황 리프트 플레이트 (Kiva 의 그 원판)
+      · 밖으로 조금 나온 구동 바퀴
+      · 뒤쪽 상태 표시등 (발광)
+      · 앞쪽 라이다 터렛
+    을 조합했다.
+
+  ─ 위를 보는 카메라 ───────────────────────────────────────────────────
+    리프트 플레이트를 가운데가 뚫린 링으로 만들어 카메라가 그 구멍으로
+    포드 데크 밑면 마커를 본다. 데크까지 0.125 m 뿐이라 화각이 넓어야 한다.
+    마커 0.40 m 가 들어오도록 수평 FOV 2.3 rad.
+    충돌체는 꽉 찬 판 하나다 (포드를 안정적으로 받치려고). 충돌체는
+    렌더링되지 않으므로 카메라 시야를 막지 않는다.
+
+  사용
+    xacro pod_bot.urdf.xacro ns:=robot1 > robot1.urdf
+-->
+<robot name="pod_bot" xmlns:xacro="http://www.ros.org/wiki/xacro">
+
+  <xacro:arg name="ns" default="robot1"/>
+  <xacro:property name="ns" value="$(arg ns)"/>
+
+  <!-- ── 치수 ───────────────────────────────────────────────────────── -->
+  <xacro:property name="base_l" value="0.62"/>
+  <xacro:property name="base_w" value="0.50"/>
+  <xacro:property name="base_h" value="0.21"/>
+  <xacro:property name="base_z" value="0.155"/>    <!-- 바닥에서 차체 중심 -->
+  <xacro:property name="corner_r" value="0.07"/>
+
+  <xacro:property name="wheel_r" value="0.085"/>
+  <xacro:property name="wheel_t" value="0.04"/>
+  <xacro:property name="wheel_y" value="0.255"/>  <!-- 차체 반폭 0.25 보다 조금 밖 -->
+  <xacro:property name="caster_r" value="0.035"/>
+  <xacro:property name="caster_x" value="0.23"/>
+
+  <xacro:property name="plate_out" value="0.25"/>
+  <xacro:property name="plate_in"  value="0.14"/> <!-- 카메라가 보는 구멍 -->
+  <xacro:property name="plate_t"   value="0.045"/>
+  <xacro:property name="plate_z"   value="0.305"/>  <!-- 내렸을 때 플레이트 중심 -->
+  <xacro:property name="lift_travel" value="0.16"/>
+
+  <xacro:property name="deck_z"  value="0.27"/>    <!-- 차체 윗판 -->
+  <xacro:property name="cam_z"   value="0.295"/>
+  <xacro:property name="lidar_x" value="0.325"/>
+  <xacro:property name="lidar_z" value="0.19"/>
+
+  <!-- 팔각 링 한 조각의 치수 -->
+  <xacro:property name="ring_r" value="${(plate_out + plate_in) / 2}"/>
+  <xacro:property name="seg_t"  value="${plate_out - plate_in}"/>
+  <xacro:property name="seg_w"  value="${2 * plate_out * 0.4143}"/>
+
+  <material name="chassis">  <color rgba="0.17 0.18 0.21 1"/></material>
+  <material name="deck">     <color rgba="0.29 0.31 0.34 1"/></material>
+  <material name="bumper">   <color rgba="0.09 0.09 0.10 1"/></material>
+  <material name="plate">    <color rgba="0.95 0.42 0.05 1"/></material>
+  <material name="tire">     <color rgba="0.05 0.05 0.06 1"/></material>
+  <material name="sensor">   <color rgba="0.72 0.74 0.78 1"/></material>
+  <material name="beacon">   <color rgba="0.10 0.85 0.75 1"/></material>
+
+  <!-- ================================================================= -->
+  <!-- 차체                                                               -->
+  <!-- ================================================================= -->
+  <link name="base_footprint"/>
+
+  <joint name="base_joint" type="fixed">
+    <parent link="base_footprint"/>
+    <child  link="base_link"/>
+    <origin xyz="0 0 ${base_z}"/>
+  </joint>
+
+  <!-- 모서리를 둥글리는 원기둥 -->
+  <xacro:macro name="corner" params="name x y">
+    <visual name="${name}">
+      <origin xyz="${x} ${y} 0"/>
+      <geometry><cylinder radius="${corner_r}" length="${base_h}"/></geometry>
+      <material name="chassis"/>
+    </visual>
+  </xacro:macro>
+
+  <link name="base_link">
+    <inertial>
+      <mass value="20.0"/>
+      <inertia ixx="0.4902" iyy="0.7142" izz="1.0573" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+
+    <!-- 둥근 사각 차체: 긴 박스 + 넓은 박스 + 모서리 원기둥 4개 -->
+    <visual name="body_long">
+      <geometry>
+        <box size="${base_l} ${base_w - 2*corner_r} ${base_h}"/>
+      </geometry>
+      <material name="chassis"/>
+    </visual>
+    <visual name="body_wide">
+      <geometry>
+        <box size="${base_l - 2*corner_r} ${base_w} ${base_h}"/>
+      </geometry>
+      <material name="chassis"/>
+    </visual>
+    <xacro:corner name="c_fl" x="${ (base_l/2 - corner_r)}" y="${ (base_w/2 - corner_r)}"/>
+    <xacro:corner name="c_fr" x="${ (base_l/2 - corner_r)}" y="${-(base_w/2 - corner_r)}"/>
+    <xacro:corner name="c_rl" x="${-(base_l/2 - corner_r)}" y="${ (base_w/2 - corner_r)}"/>
+    <xacro:corner name="c_rr" x="${-(base_l/2 - corner_r)}" y="${-(base_w/2 - corner_r)}"/>
+
+    <!-- 바닥 범퍼 스커트 -->
+    <visual name="bumper">
+      <origin xyz="0 0 ${-base_h/2 + 0.025}"/>
+      <geometry><box size="${base_l + 0.01} ${base_w + 0.01} 0.05"/></geometry>
+      <material name="bumper"/>
+    </visual>
+
+    <!-- 윗판 -->
+    <visual name="top_deck">
+      <origin xyz="0 0 ${deck_z - base_z}"/>
+      <geometry><box size="0.52 0.42 0.02"/></geometry>
+      <material name="deck"/>
+    </visual>
+
+    <!-- 뒤쪽 상태 표시등 -->
+    <visual name="beacon">
+      <origin xyz="-0.265 0 ${0.295 - base_z}"/>
+      <geometry><box size="0.05 0.28 0.025"/></geometry>
+      <material name="beacon"/>
+    </visual>
+
+    <!-- 충돌은 단순한 박스 하나로 (물리 안정성) -->
+    <collision name="body">
+      <geometry><box size="${base_l} ${base_w} ${base_h}"/></geometry>
+    </collision>
+  </link>
+
+  <!-- 구동 바퀴 2개 -->
+  <xacro:macro name="drive_wheel" params="side y">
+    <link name="wheel_${side}_link">
+      <inertial>
+        <mass value="1.3"/>
+        <inertia ixx="0.002522" iyy="0.002522" izz="0.004696"
+                 ixy="0" ixz="0" iyz="0"/>
+      </inertial>
+      <visual>
+        <origin rpy="1.5708 0 0"/>
+        <geometry><cylinder radius="${wheel_r}" length="${wheel_t}"/></geometry>
+        <material name="tire"/>
+      </visual>
+      <collision>
+        <origin rpy="1.5708 0 0"/>
+        <geometry><cylinder radius="${wheel_r}" length="${wheel_t}"/></geometry>
+      </collision>
+    </link>
+    <joint name="wheel_${side}_joint" type="continuous">
+      <parent link="base_link"/>
+      <child  link="wheel_${side}_link"/>
+      <origin xyz="0 ${y} ${wheel_r - base_z}"/>
+      <axis xyz="0 1 0"/>
+      <dynamics damping="0.02" friction="0.02"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:drive_wheel side="left"  y="${ wheel_y}"/>
+  <xacro:drive_wheel side="right" y="${-wheel_y}"/>
+
+  <!-- 캐스터 2개. 구름 관절이 없으므로 마찰을 0 으로 둬야 제자리 회전이 된다. -->
+  <xacro:macro name="caster" params="side x">
+    <link name="caster_${side}_link">
+      <inertial>
+        <mass value="0.3"/>
+        <inertia ixx="1.47e-4" iyy="1.47e-4" izz="1.47e-4" ixy="0" ixz="0" iyz="0"/>
+      </inertial>
+      <visual>
+        <geometry><sphere radius="${caster_r}"/></geometry>
+        <material name="tire"/>
+      </visual>
+      <collision>
+        <geometry><sphere radius="${caster_r}"/></geometry>
+      </collision>
+    </link>
+    <joint name="caster_${side}_joint" type="fixed">
+      <parent link="base_link"/>
+      <child  link="caster_${side}_link"/>
+      <origin xyz="${x} 0 ${caster_r - base_z}"/>
+    </joint>
+  </xacro:macro>
+
+  <xacro:caster side="front" x="${ caster_x}"/>
+  <xacro:caster side="rear"  x="${-caster_x}"/>
+
+  <!-- ================================================================= -->
+  <!-- 리프트 플레이트 - 가운데가 뚫린 팔각 링                             -->
+  <!-- ================================================================= -->
+  <xacro:macro name="ring_seg" params="i a">
+    <visual name="ring_${i}">
+      <origin xyz="${ring_r * cos(a)} ${ring_r * sin(a)} 0" rpy="0 0 ${a}"/>
+      <geometry><box size="${seg_t} ${seg_w} ${plate_t}"/></geometry>
+      <material name="plate"/>
+    </visual>
+  </xacro:macro>
+
+  <link name="lift_link">
+    <inertial>
+      <mass value="3.0"/>
+      <inertia ixx="0.047381" iyy="0.047381" izz="0.09375"
+               ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+
+    <xacro:ring_seg i="0" a="0"/>
+    <xacro:ring_seg i="1" a="0.7854"/>
+    <xacro:ring_seg i="2" a="1.5708"/>
+    <xacro:ring_seg i="3" a="2.3562"/>
+    <xacro:ring_seg i="4" a="3.1416"/>
+    <xacro:ring_seg i="5" a="3.9270"/>
+    <xacro:ring_seg i="6" a="4.7124"/>
+    <xacro:ring_seg i="7" a="5.4978"/>
+
+    <!-- 충돌은 꽉 찬 판 하나. 포드를 안정적으로 받치고 접촉 계산도 가볍다.
+         충돌체는 렌더링되지 않으므로 위를 보는 카메라를 막지 않는다. -->
+    <collision name="plate">
+      <geometry><box size="0.40 0.40 ${plate_t}"/></geometry>
+    </collision>
+  </link>
+
+  <joint name="lift_joint" type="prismatic">
+    <parent link="base_link"/>
+    <child  link="lift_link"/>
+    <origin xyz="0 0 ${plate_z - base_z}"/>
+    <axis xyz="0 0 1"/>
+    <limit lower="0.0" upper="${lift_travel}" effort="900" velocity="0.25"/>
+    <dynamics damping="3.0" friction="0.3"/>
+  </joint>
+
+  <!-- ================================================================= -->
+  <!-- 센서                                                               -->
+  <!-- ================================================================= -->
+  <!-- 라이다 터렛. 하우징을 센서 원점 아래로 내린다 - gpu_lidar 는 장면을
+       렌더해서 거리를 재므로 원점에 자기 하우징이 겹치면 값이 깎인다. -->
+  <link name="lidar_link">
+    <inertial>
+      <mass value="0.1"/>
+      <inertia ixx="1e-4" iyy="1e-4" izz="1e-4" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <origin xyz="0 0 -0.04"/>
+      <geometry><cylinder radius="0.038" length="0.05"/></geometry>
+      <material name="sensor"/>
+    </visual>
+  </link>
+  <joint name="lidar_joint" type="fixed">
+    <parent link="base_link"/>
+    <child  link="lidar_link"/>
+    <origin xyz="${lidar_x} 0 ${lidar_z - base_z}"/>
+  </joint>
+
+  <!-- 위를 보는 카메라. 리프트 링 구멍으로 포드 데크 밑면 마커를 본다. -->
+  <link name="pod_cam_link">
+    <inertial>
+      <mass value="0.04"/>
+      <inertia ixx="1e-5" iyy="1e-5" izz="1e-5" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+    <visual>
+      <geometry><cylinder radius="0.018" length="0.012"/></geometry>
+      <material name="sensor"/>
+    </visual>
+  </link>
+  <joint name="pod_cam_joint" type="fixed">
+    <parent link="base_link"/>
+    <child  link="pod_cam_link"/>
+    <!-- 광축이 +Z 를 보도록 피치를 -90도 준다 (카메라 기본 축은 +X) -->
+    <origin xyz="0 0 ${cam_z - base_z}" rpy="0 -1.5708 0"/>
+  </joint>
+
+  <link name="imu_link">
+    <inertial>
+      <mass value="0.02"/>
+      <inertia ixx="1e-6" iyy="1e-6" izz="1e-6" ixy="0" ixz="0" iyz="0"/>
+    </inertial>
+  </link>
+  <joint name="imu_joint" type="fixed">
+    <parent link="base_link"/>
+    <child  link="imu_link"/>
+    <origin xyz="0 0 0"/>
+  </joint>
+
+  <!-- ================================================================= -->
+  <!-- Gazebo                                                             -->
+  <!-- ================================================================= -->
+  <gazebo reference="wheel_left_link">  <mu1>1.2</mu1><mu2>1.2</mu2></gazebo>
+  <gazebo reference="wheel_right_link"> <mu1>1.2</mu1><mu2>1.2</mu2></gazebo>
+  <!-- 캐스터는 구름 관절이 없으므로 마찰 0 이어야 제자리 회전이 된다 -->
+  <gazebo reference="caster_front_link"><mu1>0.0</mu1><mu2>0.0</mu2></gazebo>
+  <gazebo reference="caster_rear_link"> <mu1>0.0</mu1><mu2>0.0</mu2></gazebo>
+  <!-- 포드가 플레이트 위에서 미끄러지지 않게 마찰을 높인다. 직진은 이걸로
+       버티지만 급회전은 밀린다. 계획서 9장이 권한 detachable_joint 가
+       확실한 방법이다 (README 참고). -->
+  <gazebo reference="lift_link">        <mu1>2.0</mu1><mu2>2.0</mu2></gazebo>
+
+  <gazebo reference="lidar_link">
+    <sensor name="lidar" type="gpu_lidar">
+      <topic>/${ns}/scan</topic>
+      <gz_frame_id>${ns}/lidar_link</gz_frame_id>
+      <update_rate>10</update_rate>
+      <always_on>true</always_on>
+      <visualize>false</visualize>
+      <lidar>
+        <scan>
+          <horizontal>
+            <samples>360</samples>
+            <resolution>1</resolution>
+            <!-- 270도. 뒤쪽은 차체에 가려서 의미가 없다 -->
+            <min_angle>-2.356</min_angle>
+            <max_angle>2.356</max_angle>
+          </horizontal>
+        </scan>
+        <range><min>0.10</min><max>12.0</max><resolution>0.01</resolution></range>
+        <noise>
+          <type>gaussian</type><mean>0.0</mean><stddev>0.008</stddev>
+        </noise>
+      </lidar>
+    </sensor>
+  </gazebo>
+
+  <gazebo reference="pod_cam_link">
+    <sensor name="pod_cam" type="camera">
+      <topic>/${ns}/pod_cam/image</topic>
+      <gz_frame_id>${ns}/pod_cam_link</gz_frame_id>
+      <update_rate>3</update_rate>
+      <always_on>true</always_on>
+      <camera>
+        <!-- 데크까지 0.125 m 뿐이다. 2.3 rad 면 그 거리에서 0.56 m 폭을 보므로
+             마커 0.40 m 가 여유 있게 들어온다. -->
+        <horizontal_fov>2.3</horizontal_fov>
+        <image><width>640</width><height>480</height><format>R8G8B8</format></image>
+        <clip><near>0.02</near><far>3.0</far></clip>
+      </camera>
+    </sensor>
+  </gazebo>
+
+  <gazebo reference="imu_link">
+    <sensor name="imu" type="imu">
+      <topic>/${ns}/imu</topic>
+      <gz_frame_id>${ns}/imu_link</gz_frame_id>
+      <update_rate>50</update_rate>
+      <always_on>true</always_on>
+    </sensor>
+  </gazebo>
+
+  <gazebo>
+    <plugin filename="gz-sim-diff-drive-system"
+            name="gz::sim::systems::DiffDrive">
+      <left_joint>wheel_left_joint</left_joint>
+      <right_joint>wheel_right_joint</right_joint>
+      <wheel_separation>${2 * wheel_y}</wheel_separation>
+      <wheel_radius>${wheel_r}</wheel_radius>
+      <max_linear_acceleration>1.0</max_linear_acceleration>
+      <topic>/${ns}/cmd_vel</topic>
+      <odom_topic>/${ns}/odom</odom_topic>
+      <tf_topic>/${ns}/tf</tf_topic>
+      <frame_id>${ns}/odom</frame_id>
+      <child_frame_id>${ns}/base_footprint</child_frame_id>
+      <odom_publish_frequency>30</odom_publish_frequency>
+    </plugin>
+
+    <plugin filename="gz-sim-joint-state-publisher-system"
+            name="gz::sim::systems::JointStatePublisher">
+      <topic>/${ns}/joint_states</topic>
+      <joint_name>wheel_left_joint</joint_name>
+      <joint_name>wheel_right_joint</joint_name>
+      <joint_name>lift_joint</joint_name>
+    </plugin>
+
+    <!-- 리프트. std_msgs/Double 로 목표 높이(m). 0.0 내림 / 0.16 올림 -->
+    <plugin filename="gz-sim-joint-position-controller-system"
+            name="gz::sim::systems::JointPositionController">
+      <joint_name>lift_joint</joint_name>
+      <topic>/${ns}/lift/cmd</topic>
+      <p_gain>9000</p_gain>
+      <i_gain>250</i_gain>
+      <d_gain>450</d_gain>
+      <i_max>600</i_max><i_min>-600</i_min>
+      <cmd_max>800</cmd_max><cmd_min>-800</cmd_min>
+    </plugin>
+
+    <plugin filename="gz-sim-pose-publisher-system"
+            name="gz::sim::systems::PosePublisher">
+      <publish_link_pose>false</publish_link_pose>
+      <publish_model_pose>true</publish_model_pose>
+      <publish_nested_model_pose>false</publish_nested_model_pose>
+      <use_pose_vector_msg>false</use_pose_vector_msg>
+      <update_frequency>10</update_frequency>
+    </plugin>
+  </gazebo>
+
+</robot>
