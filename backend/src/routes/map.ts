@@ -38,6 +38,29 @@ mapRouter.post('/nodes', async (req, res) => {
   }
 })
 
+// 노드 이동. 위치가 바뀌면 이어진 길의 거리도 다시 계산해서 맞춰 둠
+mapRouter.patch('/nodes/:id', async (req, res) => {
+  const { x, y } = req.body
+  if (!Number.isFinite(x) || !Number.isFinite(y))
+    return res.status(400).json({ error: 'x, y 는 숫자여야 함' })
+
+  const [r]: any = await pool.query('UPDATE node SET x = ?, y = ? WHERE id = ?', [x, y, req.params.id])
+  if (r.affectedRows === 0) return res.status(404).json({ error: '없는 노드' })
+
+  const [edges]: any = await pool.query(
+    `SELECT e.id, a.x AS a_x, a.y AS a_y, b.x AS b_x, b.y AS b_y
+     FROM edge e
+     JOIN node a ON a.id = e.from_node
+     JOIN node b ON b.id = e.to_node
+     WHERE e.from_node = ? OR e.to_node = ?`,
+    [req.params.id, req.params.id])
+  for (const e of edges) {
+    await pool.query('UPDATE edge SET distance = ? WHERE id = ?',
+      [dist({ x: e.a_x, y: e.a_y }, { x: e.b_x, y: e.b_y }), e.id])
+  }
+  res.json({ id: Number(req.params.id), x, y })
+})
+
 mapRouter.delete('/nodes/:id', async (req, res) => {
   // TODO(5단계): 점유 중이거나 경로에 들어 있는 노드는 삭제 거부
   const [r]: any = await pool.query('DELETE FROM node WHERE id = ?', [req.params.id])
@@ -47,7 +70,7 @@ mapRouter.delete('/nodes/:id', async (req, res) => {
 
 // ---------- 길 ----------
 mapRouter.post('/edges', async (req, res) => {
-  const { from_node, to_node, direction = 'both' } = req.body
+  const { from_node, to_node, direction = 'one' } = req.body
   if (!Number.isInteger(from_node) || !Number.isInteger(to_node))
     return res.status(400).json({ error: 'from_node, to_node 는 정수' })
   if (from_node === to_node)
