@@ -58,6 +58,16 @@ mapRouter.post('/edges', async (req, res) => {
   const [rows]: any = await pool.query(
     'SELECT id, x, y FROM node WHERE id IN (?, ?)', [from_node, to_node])
   if (rows.length !== 2) return res.status(404).json({ error: '없는 노드가 있음' })
+  
+  // 같은 방향 길이 이미 있으면 거절. 반대 방향은 허용 (둘 다 있으면 양방통행)
+  // 이미 양방(both) 길이 있으면 어느 방향이든 거절
+  const [dup]: any = await pool.query(
+    `SELECT id FROM edge
+     WHERE (from_node = ? AND to_node = ?)
+        OR (from_node = ? AND to_node = ? AND direction = 'both')`,
+    [from_node, to_node, to_node, from_node])
+  if (dup.length > 0)
+    return res.status(409).json({ error: '이미 그 방향으로 이어져 있음' })
 
   const a = rows.find((n: any) => n.id === from_node)
   const b = rows.find((n: any) => n.id === to_node)
